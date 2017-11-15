@@ -189,7 +189,6 @@ zx_status_t aml_i2c_wr_async(aml_i2c_connection_t *conn, const uint8_t *buff, ui
 zx_status_t aml_i2c_wr_rd_async(aml_i2c_connection_t *conn, const uint8_t *txbuff, uint32_t txlen,
                                                             uint32_t rxlen, i2c_complete_cb cb,
                                                             void* cookie) {
-
     ZX_DEBUG_ASSERT(txbuff);
     return aml_i2c_queue_async(conn, txbuff, txlen, rxlen, cb, cookie);
 }

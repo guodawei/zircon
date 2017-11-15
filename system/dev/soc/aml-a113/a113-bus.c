@@ -22,6 +22,8 @@
 
 #include "a113-bus.h"
 #include "a113-hw.h"
+#include "aml-i2c.h"
+#include "aml-tdm.h"
 #include "gauss-hw.h"
 #include <hw/reg.h>
 
@@ -88,13 +90,12 @@ static zx_status_t a113_bus_bind(void* ctx, zx_device_t* parent) {
         return ZX_ERR_NOT_SUPPORTED;
     }
 
+
     // Note: We need to do this before adding this device because this method
     //       sets up the GPIO protocol as well.
+
     if ((status = a113_gpio_init(bus)) != ZX_OK) {
         zxlogf(ERROR, "a113_gpio_init failed: %d\n", status);
-    }
-    if ((status = a113_i2c_init(bus)) != ZX_OK) {
-        zxlogf(ERROR, "a113_i2c_init failed: %d\n", status);
     }
 
     // pinmux for Gauss i2c
@@ -109,6 +110,24 @@ static zx_status_t a113_bus_bind(void* ctx, zx_device_t* parent) {
     a113_pinmux_config(bus, A113_GPIOA(16), 1);
     a113_pinmux_config(bus, A113_GPIOA(17), 1);
     a113_pinmux_config(bus, A113_GPIOA(18), 1);
+
+    if ((status = a113_i2c_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "a113_i2c_init failed: %d\n", status);
+    }
+
+
+
+    a113_pinmux_config(bus, TDM_BCLK_C, 1);
+    a113_pinmux_config(bus, TDM_FSYNC_C, 1);
+    a113_pinmux_config(bus, TDM_MOSI_C, 1);
+    a113_pinmux_config(bus, TDM_MISO_C, 2);
+
+    a113_pinmux_config(bus, SPK_MUTEn, 0);
+    bus->gpio.ops->config(NULL, SPK_MUTEn, GPIO_DIR_OUT);
+    bus->gpio.ops->write(NULL, SPK_MUTEn, 1);
+
+
+
 
     bus->usb_mode_switch.ops = &usb_mode_switch_ops;
     bus->usb_mode_switch.ctx = bus;
