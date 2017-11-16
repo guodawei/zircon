@@ -34,7 +34,7 @@ static void dac_dumpregs(i2c_channel_t *ch, uint32_t start, uint32_t end) {
 
 static zx_status_t dac_standby(i2c_channel_t *ch, bool standby) {
         uint8_t write_buf[2];
-        write_buf[0] = 0x01;
+        write_buf[0] = 0x02;
         write_buf[1] = standby ? 0x10 : 0x00;
         return i2c_transact(ch, write_buf, 2, 0, NULL, NULL);
 }
@@ -45,14 +45,26 @@ static zx_status_t dac_reset(i2c_channel_t *ch) {
         write_buf[1] = 0x01;
         return i2c_transact(ch, write_buf, 2, 0, NULL, NULL);
 }
-static zx_status_t dac_setmode(i2c_channel_t *ch) {
+static zx_status_t dac_setmode(i2c_channel_t *ch, uint32_t slot) {
         uint8_t write_buf[2];
 
         write_buf[0] = 0x28; write_buf[1] = 0x13;
         zx_status_t status = i2c_transact(ch, write_buf, 2, 0, NULL, NULL);
         if (status != ZX_OK) return status;
 
-        write_buf[0] = 0x29; write_buf[1] = 0x01;
+
+        write_buf[0] = 61; write_buf[1] = 0x70;
+        status = i2c_transact(ch, write_buf, 2, 0, NULL, NULL);
+        if (status != ZX_OK) return status;
+
+        write_buf[0] = 62; write_buf[1] = 0x70;
+        status = i2c_transact(ch, write_buf, 2, 0, NULL, NULL);
+        if (status != ZX_OK) return status;
+
+        uint8_t slt;
+        slt = ((1 + (slot * 32)) & 0xff);
+        printf("slot = 0x%0x\n",slt);
+        write_buf[0] = 0x29; write_buf[1] = slt;
         return i2c_transact(ch, write_buf, 2, 0, NULL, NULL);
 }
 
@@ -105,11 +117,18 @@ zx_status_t TdmOutputStream::Create(zx_device_t* parent) {
         return res;
     }
 
-    res = i2c_get_channel(&stream->i2c_, 1, &stream->sub_l_i2c_);
+    res = i2c_get_channel(&stream->i2c_, 0, &stream->sub_l_i2c_);
     if ( res != ZX_OK) {
         zxlogf(ERROR,"tdm-output-driver: failed to acquire i2c subL channel\n");
         return res;
     }
+
+    res = i2c_get_channel(&stream->i2c_, 1, &stream->sub_r_i2c_);
+    if ( res != ZX_OK) {
+        zxlogf(ERROR,"tdm-output-driver: failed to acquire i2c subR channel\n");
+        return res;
+    }
+
 
 /*TODO - right now we are getting the irq via pdev, but would also like
     a way to push down which tdm block and frddr blocks to use. will hard
@@ -593,21 +612,8 @@ zx_status_t TdmOutputStream::OnGetBufferLocked(dispatcher::Channel* channel,
         ring_buffer_size_ = fifo_bytes_;
 
     // Set up our state for generating notifications.
-    if (req.notifications_per_ring) {
-        bytes_per_notification_ = ring_buffer_size_ / req.notifications_per_ring;
-    } else {
-        bytes_per_notification_ = 0;
-    }
-    us_per_notification_ = 1000000 * bytes_per_notification_ /(48000 * frame_size_);
 
-
-
-    dac_standby(&sub_l_i2c_,true);
-    dac_reset(&sub_l_i2c_);
-    dac_setmode(&sub_l_i2c_);
-    dac_standby(&sub_l_i2c_,false);
-
-    dac_dumpregs(&sub_l_i2c_,1,100);
+    //dac_dumpregs(&sub_l_i2c_,1,100);
 
 
     // Create the ring buffer vmo we will use to share memory with the client.
@@ -630,6 +636,32 @@ zx_status_t TdmOutputStream::OnGetBufferLocked(dispatcher::Channel* channel,
     // TODO - (hollande) Make this work with non contig vmo
     resp.result = zx_vmo_create_contiguous(get_root_resource(), ring_buffer_size_, 0,
                                  ring_buffer_vmo_.reset_and_get_address());
+    uint64_t vsize;
+    ring_buffer_vmo_.get_size(&vsize);
+    ring_buffer_size_ = (uint32_t)(vsize & 0xffffffff);
+    printf("vmo size = %d\n",ring_buffer_size_);
+
+    if (req.notifications_per_ring) {
+        bytes_per_notification_ = ring_buffer_size_ / req.notifications_per_ring;
+    } else {
+        bytes_per_notification_ = 0;
+    }
+    us_per_notification_ = (1000 * bytes_per_notification_) /(48 * frame_size_);
+    printf("bytes_per_notification_ = %u\n",bytes_per_notification_);
+    printf("us_per_notification_ = %u\n",us_per_notification_);
+    printf("frame_size_ = %u\n",frame_size_);
+
+    dac_standby(&sub_l_i2c_,true);
+    dac_reset(&sub_l_i2c_);
+    dac_setmode(&sub_l_i2c_,0);
+    dac_standby(&sub_l_i2c_,false);
+
+    dac_standby(&sub_r_i2c_,true);
+    dac_reset(&sub_r_i2c_);
+    dac_setmode(&sub_r_i2c_,0);
+    dac_standby(&sub_r_i2c_,false);
+
+
     if (resp.result != ZX_OK) {
         zxlogf(ERROR, "Failed to create ring buffer (size %u, res %d)\n", ring_buffer_size_,
                resp.result);
@@ -652,7 +684,7 @@ zx_status_t TdmOutputStream::OnGetBufferLocked(dispatcher::Channel* channel,
     resp.result = ring_buffer_vmo_.op_range(ZX_VMO_OP_LOOKUP, 0, 4096,
                                   &temp_addr, sizeof(temp_addr));
     if (resp.result != ZX_OK) goto finished;
-    ring_buffer_phys_ = (uint32_t)(temp_addr >> 32);
+    ring_buffer_phys_ = (uint32_t)(temp_addr & 0xffffffff);
     //printf("ring buffer phys = %p\n",ring_buffer_phys_);
 
 
@@ -667,29 +699,6 @@ zx_status_t TdmOutputStream::OnGetBufferLocked(dispatcher::Channel* channel,
 
     // Enable clock gates for PDM and TDM blocks
     regs_->clk_gate_en = (1 << 8) | (1 << 11) | 1;
-
-    char write_buf[8];
-    if (0){
-        
-        write_buf[0] = 0x02; write_buf[1] = 0x10;
-        zx_status_t status =i2c_transact(&sub_l_i2c_, write_buf, 2, 0, NULL, NULL);
-        if (status != ZX_OK) {
-            printf("i2c_transact failed\n");
-        }
-
-        write_buf[0] = 0x01; write_buf[1] = 0x01;
-        i2c_transact(&sub_l_i2c_, write_buf, 2, 0, NULL, NULL);
-
-        write_buf[0] = 0x28; write_buf[1] = 0x13;
-        i2c_transact(&sub_l_i2c_, write_buf, 2, 0, NULL, NULL);
-
-        write_buf[0] = 0x29; write_buf[1] = 0x01;
-        i2c_transact(&sub_l_i2c_, write_buf, 2, 0, NULL, NULL);
-
-        write_buf[0] = 0x02; write_buf[1] = 0x00;
-        i2c_transact(&sub_l_i2c_, write_buf, 2, 0, NULL, NULL);
-    }
-
 /*
     for(uint8_t reg = 1; reg < 0x30; reg++) {
         write_buf[0]=reg;
@@ -723,7 +732,11 @@ finished:
 }
 
 zx_status_t TdmOutputStream::ProcessRingNotification(fbl::RefPtr<dispatcher::Channel>  channel) {
-    notify_timer_->Arm(zx_deadline_after(ZX_USEC(us_per_notification_)));
+    if (running_) {
+        notify_timer_->Arm(zx_deadline_after(ZX_USEC(us_per_notification_)));
+    } else {
+        notify_timer_->Deactivate();
+    }
 
 
     audio_proto::RingBufPositionNotify resp;
@@ -744,7 +757,7 @@ zx_status_t TdmOutputStream::OnStartLocked(dispatcher::Channel* channel,
             [tdm = this,ch=fbl::WrapRefPtr(channel)](dispatcher::Timer * timer)->zx_status_t {
                 return tdm->ProcessRingNotification(ch);
             });
-
+    running_ = true;
     notify_timer_->Activate(default_domain_, fbl::move(thandler));
 
     notify_timer_->Arm(zx_deadline_after(ZX_USEC(us_per_notification_)));
@@ -759,7 +772,7 @@ zx_status_t TdmOutputStream::OnStartLocked(dispatcher::Channel* channel,
     regs_->frddr[2].ctl0 = (0 << 16) | (2 << 0);
     regs_->frddr[2].ctl1 = ((0x40 - 1) << 24) | ((0x20 -1) << 16) | (0 << 8);
     regs_->frddr[2].start_addr = (uint32_t)ring_buffer_phys_;
-    regs_->frddr[2].finish_addr = (uint32_t)(ring_buffer_phys_ + ring_buffer_size_ - frame_size_);
+    regs_->frddr[2].finish_addr = (uint32_t)(ring_buffer_phys_ + ring_buffer_size_ - 8);
 
     regs_->tdmout[TDM_OUT_C].ctl0 =  (1 << 15) | (7 << 5 ) | (31 << 0);
 
@@ -787,6 +800,7 @@ zx_status_t TdmOutputStream::OnStartLocked(dispatcher::Channel* channel,
 zx_status_t TdmOutputStream::OnStopLocked(dispatcher::Channel* channel,
                                               const audio_proto::RingBufStopReq& req) {
     regs_->tdmout[TDM_OUT_C].ctl0 &= ~(1 << 31);
+    running_ = false;
     audio_proto::RingBufStopResp resp;
     resp.hdr = req.hdr;
     resp.result = ZX_OK;

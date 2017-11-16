@@ -155,6 +155,7 @@ private:
     uint32_t bytes_per_notification_ = 0;
     uint32_t us_per_notification_ = 0;
     uint32_t notification_acc_ __TA_GUARDED(req_lock_);
+    bool running_;
 
     zx::vmo  ring_buffer_vmo_;
     void*    ring_buffer_virt_  = nullptr;

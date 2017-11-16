@@ -83,6 +83,7 @@ static int aml_i2c_thread(void *arg) {
         mtx_lock(&dev->txn_mutex);
         while ((txn = list_remove_tail_type(&dev->txn_list, aml_i2c_txn_t, node)) != NULL) {
             mtx_unlock(&dev->txn_mutex);
+            printf("setting slave addr = %02x\n",txn->conn->slave_addr);
             aml_i2c_set_slave_addr(dev, txn->conn->slave_addr);
             if (txn->tx_len > 0) {
                 aml_i2c_write(dev,txn->tx_buff, txn->tx_len);
@@ -231,7 +232,9 @@ zx_status_t aml_i2c_write(aml_i2c_dev_t *dev, uint8_t *buff, uint32_t len) {
     uint64_t wdata = 0;
     for (uint32_t i=0; i < len; i++) {
         wdata |= (uint64_t)buff[i] << (8*i);
+        printf("%02x ",buff[i]);
     }
+    printf("\n");
 
     dev->virt_regs->token_wdata_0 = (uint32_t)(wdata & 0xffffffff);
     dev->virt_regs->token_wdata_1 = (uint32_t)((wdata >> 32) & 0xffffffff);

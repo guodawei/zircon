@@ -42,7 +42,6 @@ __BEGIN_CDECLS;
 // Device ID for Gauss audio
 #define PDEV_DID_AMLOGIC_GAUSS_AUDIO 1
 // I2C test driver
-#define PDEV_DID_GAUSS_I2C_TEST     2
 // TDM driver
 #define PDEV_DID_AMLOGIC_GAUSS_TDM_AUDIO 4
 
