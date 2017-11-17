@@ -123,6 +123,16 @@ void platform_panic_start(void)
     }
 }
 
+// Look up the physical address the kernel appears to be loaded at
+static paddr_t get_kernel_base_phys() {
+    extern int _start;
+    paddr_t pa;
+    auto status = arm64_mmu_translate((vaddr_t)&_start, &pa, false, false);
+    ASSERT(status == ZX_OK);
+
+    return pa;
+}
+
 // Reads Linux device tree to initialize command line and return ramdisk location
 static void read_device_tree(void** ramdisk_base, size_t* ramdisk_size, size_t* mem_size) {
     if (ramdisk_base) *ramdisk_base = nullptr;
@@ -340,7 +350,7 @@ void platform_halt_secondary_cpus(void) {
 }
 
 static void platform_start_cpu(uint cluster, uint cpu) {
-    uint32_t ret = psci_cpu_on(cluster, cpu, MEMBASE + KERNEL_LOAD_OFFSET);
+    uint32_t ret = psci_cpu_on(cluster, cpu, get_kernel_base_phys());
     dprintf(INFO, "Trying to start cpu %u:%u returned: %d\n", cluster, cpu, (int)ret);
 }
 
@@ -546,13 +556,13 @@ static void process_bootdata(bootdata_t* root) {
         panic("No MDI found in ramdisk\n");
     }
 }
-extern int _end;
+
 void platform_early_init(void)
 {
-    // QEMU does not put device tree pointer in the boot-time x2 register,
-    // so set it here before calling read_device_tree.
+    // QEMU does not put device tree pointer in the boot-time x0 register if loaded
+    // as a ELF file. so set it here before calling read_device_tree.
     if (boot_structure_paddr == 0) {
-        boot_structure_paddr = MEMBASE;
+        boot_structure_paddr = 0x40000000; // TODO: remove
     }
 
     void* boot_structure_kvaddr = paddr_to_physmap(boot_structure_paddr);
@@ -604,8 +614,9 @@ void platform_early_init(void)
     mem_limit_ctx_t ctx;
     zx_status_t status = mem_limit_init(&ctx);
     if (status == ZX_OK) {
+        extern int _end;
         // For these ranges we're using the base physical values
-        ctx.kernel_base = MEMBASE + KERNEL_LOAD_OFFSET;
+        ctx.kernel_base = get_kernel_base_phys();
         ctx.kernel_size = (uintptr_t)&_end - ctx.kernel_base;
         ctx.ramdisk_base = ramdisk_start_phys;
         ctx.ramdisk_size = ramdisk_end_phys - ramdisk_start_phys;
@@ -758,5 +769,5 @@ void platform_mexec(mexec_asm_func mexec_assembly, memmov_ops_t* ops,
                     uintptr_t new_bootimage_addr, size_t new_bootimage_len,
                     uintptr_t entry64_addr) {
     mexec_assembly((uintptr_t)new_bootimage_addr, 0, 0, 0, ops,
-                   (void*)(MEMBASE + KERNEL_LOAD_OFFSET));
+                   (void*)(get_kernel_base_phys()));
 }
